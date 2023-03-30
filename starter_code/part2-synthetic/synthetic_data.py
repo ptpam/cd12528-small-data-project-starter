@@ -9,6 +9,7 @@ from torch.autograd import Variable
 from torch.utils.data import Dataset, DataLoader
 from sklearn import preprocessing
 from sklearn.model_selection import train_test_split
+import csv
 
 def load_and_standardize_data(path):
     df = pd.read_csv(path, sep=',')
@@ -126,19 +127,73 @@ def generate_fake(mu, logvar, no_samples, scaler, model):
 # When you have all the code in place to generate synthetic data, uncomment the code below to run the model and the tests. 
 def main():
     # Get a device and set up data paths. You need paths for the original data, the data with just loan status = 1 and the new augmented dataset.
-
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    DATA_PATH = 'data/loan_continuous.csv'
+    df = pd.read_csv(DATA_PATH)
+    
     # Split the data out with loan status = 1
 
     # Create DataLoaders for training and validation 
+    dataset = DataBuilder(DATA_PATH)
+    trainloader = DataLoader(dataset = dataset, batch_size = 1024)
 
     # Train and validate the model 
+    D_in = dataset.x.shape[1]
+    model = Autoencoder(D_in = D_in).to(device)
+    optimizer = optim.Adam(model.parameters(), lr=1e-3)
+    loss_mse = CustomLoss()
+    
+    # Training
+    train_losses = []
+    epochs = 1500
 
-    #scaler = trainloader.dataset.standardizer
-    #fake_data = generate_fake(mu, logvar, 50000, scaler, model)
+    def train(epoch):
+        model.train()
+        train_loss = 0
+        for batch_idx, data in enumerate(trainloader):
+            data = data.to(device)
+            optimizer.zero_grad()
+            recon_batch, mu, logvar = model(data)
+            loss = loss_mse(recon_batch, data, mu, logvar)
+            loss.backward()
+            train_loss += loss.item()
+            optimizer.step()
+            
+        if epoch % 200 == 0:        
+            print('====> Epoch: {} Average loss: {:.4f}'.format(
+                epoch, train_loss / len(trainloader.dataset)))
+            train_losses.append(train_loss / len(trainloader.dataset))
 
+    for epoch in range(1, epochs + 1):
+        train(epoch)
+    
+    mu_output = []
+    logvar_output = []
+
+    with torch.no_grad():
+        for i, (data) in enumerate(trainloader):
+            data = data.to(device)
+            optimizer.zero_grad()
+            recon_batch, mu, logvar = model(data)
+            
+            mu_tensor = mu   
+            mu_output.append(mu_tensor)
+            mu_result = torch.cat(mu_output, dim=0)
+
+            logvar_tensor = logvar   
+            logvar_output.append(logvar_tensor)
+            logvar_result = torch.cat(logvar_output, dim=0)
+    
+    scaler = trainloader.dataset.standardizer
+    fake_data = generate_fake(mu_result, logvar_result, 50000, scaler, model)
+    
     # Combine the new data with original dataset
-
     DATA_PATH = 'data/loan_continuous_expanded.csv'
+    df.to_csv(DATA_PATH)
+    with open(DATA_PATH, 'a') as f:
+        write = csv.writer(f)
+        write.writerows(fake_data)
+    
     test_model(DATA_PATH)
 
 if __name__ == '__main__':
